@@ -15,7 +15,7 @@ vec4 mouth(vec2 uv) {
     vec4 col = vec4(.5, .18, .05, 1.);
 
     uv.y *= 1.5;
-    uv.y -= uv.x * uv.x * .01;
+    uv.y -= uv.x * uv.x * 1.3;
     float d = length(uv);
 
     float td = length(uv-vec2(0., .6));
