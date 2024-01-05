@@ -46,7 +46,7 @@ vec3 rotateZ(vec3 p, float a) {
     return vec3(c*p.x-s*p.y, s*p.x+c*p.y, p.z);
 }
 
-vec2 map_blocks(vec3 p, vec3 ray_d) {
+vec2 mapBlocks(vec3 p, vec3 ray_d) {
     vec2 res = vec2(OBJ_SHORTBLOCK, sd_box(rotateY(p + vec3(-186, -82.5, -169.5), 0.29718), vec3(83.66749, 83.522452, 82.5)));
 	vec2 obj1 = vec2(OBJ_TALLBLOCK, sd_box(rotateY(p + vec3(-368.5, -165, -351.5), -0.30072115), vec3(87.02012, 165, 83.6675)));
 	if (obj1.y < res.y) res = obj1;
@@ -65,7 +65,7 @@ vec2 map(vec3 p, vec3 ray_d) {
 	if (obj4.y < res.y) res = obj4;
 	vec2 obj5 = vec2(OBJ_LIGHT, sd_box(p + vec3(-278, -548.8, -292), vec3(65, 0.05, 65)));
 	if (obj5.y < res.y) res = obj5;
-	vec2 obj6 = map_blocks(p, ray_d);
+	vec2 obj6 = mapBlocks(p, ray_d);
 	if (obj6.y < res.y) res = obj6;
 	return res;
 }
@@ -95,6 +95,44 @@ float raymarch(vec3 ray_s, vec3 ray_d, out float d, out vec3 p, out int iter) {
         d += max(map_res.y, min_step);
     }
     return -1.;
+}
+
+bool raymarch_to_light(vec3 ray_s, vec3 ray_d, float max_d, float max_y, out float d, out vec3 p, out int iter, out float l_intensity) {
+    d = 0.;
+    float min_step =  1.;
+    l_intensity = 1.;
+    float map_d;
+    for (int i=1; i<=MAX_RAYMARCH_ITER_SHADOWS; i++) {
+        p = ray_s + ray_d * d;
+        map_d = mapBlocks(p, ray_d).y;
+        if (map_d < MIN_RAYMARCH_DELTA) {
+            iter = i;
+            return true;
+        }
+        l_intensity = min(l_intensity, SOFT_SHADOWS_FACTOR * map_d / d);
+        d += max(map_d, min_step);
+        if (d >= max_d || p.y > max_y) break;
+    }
+    return false;
+}
+
+vec3 interpolateNormals(vec3 v0, vec3 v1, float x) {
+    x = smoothstep(0., 1., x);
+    return normalize(vec3(
+        mix(v0.x, v1.x, x), 
+        mix(v0.y, v1.y, x),
+        mix(v0.z, v1.z, x)));
+}
+
+float ambientOcclusion(vec3 p, vec3 n)  {
+    float step = 8.;
+    float ao = 0.;
+    float d;
+    for (int i=1; i<=3; i++) {
+        d = step *  float(i);
+        ao += max(0., (d-map(p+n*d).y)/d);
+    }
+    return 1. - ao * .1;
 }
 
 vec3 render(vec3 ray_s, vec3 ray_d) {
@@ -129,10 +167,44 @@ vec3 render(vec3 ray_s, vec3 ray_d) {
             float light_dis = length(light_pos - p);
             float atten = ((1. / light_dis) * .5) + ((1. / (light_dis * light_dis)) * .5);
 
-            
+            vec3 light_pos_shadows = light_pos + vec3(0, 140, -50);
+            vec3 l_shadows = normalize(light_pos_shadows - p);
+            float d;
+            vec3  op;
+            int iter;
+            float l_intensity;
+            bool res = raymarch_to_light(p+n*.11, l_shadows, light_dis, 400., d, op, iter, l_intensity);
+
+            if (res && object_id != OBJ_CEILING) l_intensity = 0.;
+            l_intensity = max(l_intensity, .25);
+            vec3 c1 = col * max(0., dot(n, l)) * lightColor * l_intensity * atten;
+
+            vec3 c2_light_color = lightColor * rightWallColor * .08;
+            float c2_light_dis = p.x + .00001;
+            float c2_atten = 1. / c2_light_dis;
+            vec3 c2_light_d0 = vec3(-1., 0., 0.);
+            vec3 c2_light_d1 = normalize(vec3(-300., 548.8/2., 559.2/2.) - p);
+            float c2_perc = min(p.x*.01, 1.);
+            vec3 c2_light_dir = interpolateNormals(c2_light_d0, c2_light_d1, c2_perc);
+            vec3 c2 = col * max(0., dot(n, c2_light_dir)) * c2_light_color * c2_atten;
+
+            vec3 c3_light_color = lightColor * leftWallColor * .08;
+            float c3_light_dis = 556. - p.x + .1;
+            float c3_atten = 1. / c3_light_dis;
+            vec3 c3_light_d0 = vec3(1., 0., 0.);
+            vec3 c3_light_d1 = normalize(vec3(556. + 300., 548.8/2.,559.2/2.) - p);
+            float c3_perc = min((556. - p.x) * .01, 1.);
+            vec3 c3_light_dir = interpolateNormals(c3_light_d0, c3_light_d1, c3_perc);
+            vec3 c3 = col  * max(0., dot(n, c3_light_dir)) * c3_light_color * c3_atten;
+
+            col = col * .0006 + c1;
+            col += c2 + c3;
+
+            float ao = ambientOcclusion(p, n);
+            col *= ao;
         }
     }
-
+    return col;
 }
 
 vec3 rotateCamera(vec3 ray_s, vec3 ray_d) {
