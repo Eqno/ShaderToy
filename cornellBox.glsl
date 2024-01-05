@@ -26,7 +26,7 @@ const vec3 rightWallColor = vec3(.117, .4125, .115);
 const vec3 whiteWallColor = vec3(.7295, .7355, .729);
 const vec3 cameraTarget = vec3(556, 548.8, 559.2) * .5;
 
-float sd_box(vec3 p, vec3 b)  {
+float sdBox(vec3 p, vec3 b)  {
     vec3 d = abs(p) - b;
     return min(max(d.x, max(d.y, d.z)), 0.) + length(max(d, 0.));
 }
@@ -47,8 +47,8 @@ vec3 rotateZ(vec3 p, float a) {
 }
 
 vec2 mapBlocks(vec3 p, vec3 ray_d) {
-    vec2 res = vec2(OBJ_SHORTBLOCK, sd_box(rotateY(p + vec3(-186, -82.5, -169.5), 0.29718), vec3(83.66749, 83.522452, 82.5)));
-	vec2 obj1 = vec2(OBJ_TALLBLOCK, sd_box(rotateY(p + vec3(-368.5, -165, -351.5), -0.30072115), vec3(87.02012, 165, 83.6675)));
+    vec2 res = vec2(OBJ_SHORTBLOCK, sdBox(rotateY(p + vec3(-186, -82.5, -169.5), 0.29718), vec3(83.66749, 83.522452, 82.5)));
+	vec2 obj1 = vec2(OBJ_TALLBLOCK, sdBox(rotateY(p + vec3(-368.5, -165, -351.5), -0.30072115), vec3(87.02012, 165, 83.6675)));
 	if (obj1.y < res.y) res = obj1;
 	return res;
 }
@@ -63,7 +63,7 @@ vec2 map(vec3 p, vec3 ray_d) {
 	if (obj3.y < res.y) res = obj3;
 	vec2 obj4 = vec2(OBJ_RIGHTWALL, p.x);
 	if (obj4.y < res.y) res = obj4;
-	vec2 obj5 = vec2(OBJ_LIGHT, sd_box(p + vec3(-278, -548.8, -292), vec3(65, 0.05, 65)));
+	vec2 obj5 = vec2(OBJ_LIGHT, sdBox(p + vec3(-278, -548.8, -292), vec3(65, 0.05, 65)));
 	if (obj5.y < res.y) res = obj5;
 	vec2 obj6 = mapBlocks(p, ray_d);
 	if (obj6.y < res.y) res = obj6;
@@ -97,7 +97,7 @@ float raymarch(vec3 ray_s, vec3 ray_d, out float d, out vec3 p, out int iter) {
     return -1.;
 }
 
-bool raymarch_to_light(vec3 ray_s, vec3 ray_d, float max_d, float max_y, out float d, out vec3 p, out int iter, out float l_intensity) {
+bool raymarchToLight(vec3 ray_s, vec3 ray_d, float max_d, float max_y, out float d, out vec3 p, out int iter, out float l_intensity) {
     d = 0.;
     float min_step =  1.;
     l_intensity = 1.;
@@ -173,7 +173,7 @@ vec3 render(vec3 ray_s, vec3 ray_d) {
             vec3  op;
             int iter;
             float l_intensity;
-            bool res = raymarch_to_light(p+n*.11, l_shadows, light_dis, 400., d, op, iter, l_intensity);
+            bool res = raymarchToLight(p+n*.11, l_shadows, light_dis, 400., d, op, iter, l_intensity);
 
             if (res && object_id != OBJ_CEILING) l_intensity = 0.;
             l_intensity = max(l_intensity, .25);
