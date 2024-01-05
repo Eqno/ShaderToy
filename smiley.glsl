@@ -89,7 +89,9 @@ vec4 smiley(vec2 uv) {
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
-    vec2 uv = fragCoord.xy / iResolution.xy - 0.5;
-    uv.y *= iResolution.y / iResolution.x;
+    vec2 uv = fragCoord / iResolution.xy - 0.5;
+    float aspect = iResolution.x / iResolution.y;
+    if (aspect < 1.) uv.y /= aspect; else uv.x *= aspect;
+    
     fragColor = smiley(uv);
 }

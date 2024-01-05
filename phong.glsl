@@ -5,12 +5,13 @@ vec3 background(vec3 rd) {
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
-    vec2 uv = fragCoord / iResolution.xy;
-    uv.y *= iResolution.y / iResolution.x;
+    vec2 uv = fragCoord / iResolution.xy - .5;
+    float aspect = iResolution.x / iResolution.y;
+    if (aspect < 1.) uv.y /= aspect; else uv.x *= aspect;
 
     vec3 col = vec3(.6);
-    vec3 camera = vec3(.5, .5, 0);
-    vec3 center = vec3(.5, .5, 5.);
+    vec3 camera = vec3(0., 0., 0);
+    vec3 center = vec3(0., 0., 5.);
     float radius = .3;
 
     if (length(uv-center.xy) <= radius) {
