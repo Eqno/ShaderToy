@@ -394,41 +394,40 @@ bool testVisibility(const vec3 p1, const vec3 p2) {
 }
 
 // 材质
-float DistributionGGX(const float dnh, const float a) {
-    float _dnh = max(0., dnh);
-    return a * a / PI / pow(_dnh * _dnh * (a * a - 1.) + 1., 2.);
+float DistributionGGX(const float dnh, const float r) {
+    float a = r * r, _dnh = max(0., dnh), dnh_square = _dnh * _dnh;
+    return a * a / max(PI * pow(dnh_square * (a * a - 1.) + 1., 2.), EPS);
 }
 
-vec3 FresnelSchlick(const float dvh, const vec3 fresnel) {
-    return fresnel + (1. - fresnel) * pow(1. - clamp(dvh, 0., 1.), 5.);
+vec3 FresnelSchlick(const float dvh, const vec3 f) {
+    return f + (1. - f) * pow(saturate(1. - dvh), 5.);
 }
 
 float GeometrySchlickGGX(float dnx, float k) {
-    return dnx / (dnx * (1. - k) + k);
+    return dnx / max(dnx * (1. - k) + k, EPS);
 }
 
-float GeometrySmith(float dnv, float dnl, float a) {
-    float k = (a + 1.) * (a + 1.) / 8.;
-    return GeometrySchlickGGX(max(0., dnv), k)
-        * GeometrySchlickGGX(max(0., dnl), k);
+float GeometrySmith(float dnv, float dnl, float r) {
+    return GeometrySchlickGGX(saturate(dnv), r / 2.)
+        * GeometrySchlickGGX(saturate(dnl), r / 2.);
 }
 
-vec3 BRDF(const vec3 n, const vec3 l, const vec3 v, const Material mat) {
-    vec3 h = normalize(l + v);
+vec3 BRDF(const vec3 n, const vec3 l, const vec3 v, Material mat)
+{
+    vec3 h = normalize(v + l);
     float dvh = dot(v, h);
+    float dnh = dot(n, h);
     float dnl = dot(n, l);
     float dnv = dot(n, v);
-    float dnh = dot(n, h);
     vec3 fresnel = mix(mat.fresnel, mat.color, mat.metallic);
 
     float D = DistributionGGX(dnh, mat.roughness);
-    vec3 F = FresnelSchlick(dvh, fresnel);
+    vec3 F = FresnelSchlick(max(dvh, 0.), fresnel);
     float G = GeometrySmith(dnv, dnl, mat.roughness);
-    
-    float denom = 4. * max(0., dnv) * max(0., dnl);
-    vec3 specular = D * F * G / max(denom, EPS);
-    vec3 kd = (vec3(1.) - F) * (1. - mat.metallic);
-    return (kd * mat.color / PI + specular) * max(0., dnl);
+
+    vec3 specular = D * G * F / max(4. * saturate(dnv) * saturate(dnl), EPS);
+    vec3 kd = mix(vec3(1.) - F, vec3(0.), mat.metallic);
+    return kd * mat.color / PI + specular;
 }
 
 // 渲染
