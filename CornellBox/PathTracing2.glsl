@@ -1,12 +1,12 @@
 // 数学
 #define PI 3.141592653589                       // 常量 π
 #define INFINITY 9999999.                       // 无限大
-#define RANDOM_SEED 0                           // 初始随机种子
+#define RANDOM_SEED 0u                          // 初始随机种子
 #define EPS 1e-5                                // 误差 EPS
 
 struct Random {
-    int seed;                                   // 随机种子
-    int flat_index;                             // 随机索引
+    uint seed;                                  // 随机种子
+    uint index;                                 // 随机索引
 } random;
 
 void updateRandom() {
@@ -14,30 +14,27 @@ void updateRandom() {
     // 随机参数 rand seed 和 index
     random = Random(
         RANDOM_SEED,
-        int(dot(gl_FragCoord.xy, vec2(1., 4096.)))
+        uint(dot(gl_FragCoord.xy, vec2(1., 4096.)))
     );
 }
 
-void EncryptTEA(inout uvec2 arg) {
+vec2 encryptTEA(const uint index, inout uint seed) {
 
     // 对输入的 arg 进行 TEA 加密
     uvec4 key = uvec4(0xa341316c, 0xc8013ea4, 0xad90777d, 0x7e95761e);
-    uint v0 = arg[0], v1 = arg[1], sum = 0u, delta = 0x9e3779b9u;
+    uint v0 = index, v1 = seed++, sum = 0u, delta = 0x9e3779b9u;
     for (int i=0; i<32; i++) {
         sum += delta;
         v0 += ((v1<<4)+key[0]) ^ (v1+sum) ^ ((v1>>5)+key[1]);
         v1 += ((v0<<4)+key[2]) ^ (v0+sum) ^ ((v0>>5)+key[3]);
     }
-    arg[0] = v0;
-    arg[1] = v1;
+    return vec2(v0, v1) / vec2(0xffffffffu);
 }
 
-vec2 GetRandom() {
+vec2 getRandom() {
 
     // fract 取小数部分获得随机数
-    uvec2 arg = uvec2(random.flat_index, random.seed++);
-    EncryptTEA(arg);
-    return fract(vec2(arg) / vec2(0xffffffffu));
+    return fract(encryptTEA(random.index, random.seed));
 }
 
 vec2 sampleDisk(const vec2 uv) {
@@ -58,12 +55,11 @@ vec3 sampleCosHemisphere(const vec2 uv) {
 mat3 constructONBFrisvad(const vec3 normal) {
 	mat3 ret;
 	ret[1] = normal;
-	if(normal.z < -0.999805696) {
-		ret[0] = vec3(0.0, -1.0, 0.0);
-		ret[2] = vec3(-1.0, 0.0, 0.0);
-	}
-	else {
-		float a = 1.0 / (1.0 + normal.z);
+	if (normal.z < -1. + EPS) {
+		ret[0] = vec3(0., -1., 0.);
+		ret[2] = vec3(-1., 0., 0.);
+	} else {
+		float a = 1. / (1. + normal.z);
 		float b = -normal.x * normal.y * a;
 		ret[0] = vec3(1.0 - normal.x * normal.x * a, b, -normal.x);
 		ret[2] = vec3(b, 1.0 - normal.y * normal.y * a, -normal.y);
@@ -71,30 +67,21 @@ mat3 constructONBFrisvad(const vec3 normal) {
 	return ret;
 }
 
-mat4 matRotateX(const float a) {
-	mat4 ret = mat4(1.);
-	ret[1][1] = ret[2][2] = cos(a);
-	ret[2][1] = sin(a);
-	ret[1][2] = -ret[2][1];
-	return ret;
+vec3 rotateX(const vec3 p, const float a) {
+    float c = cos(a), s = sin(a);
+    return vec3(p.x, c*p.y-s*p.z, s*p.y+c*p.z);
 }
-mat4 matRotateY(const float a) {
-	mat4 ret = mat4(1.);
-	ret[0][0] = ret[2][2] = cos(a);
-	ret[0][2] = sin(a);
-	ret[2][0] = -ret[0][2];
-	return ret;
+vec3 rotateY(const vec3 p, const float a) {
+    float c = cos(a), s = sin(a);
+    return vec3(c*p.x+s*p.z, p.y, -s*p.x+c*p.z);
 }
-mat4 matRotateZ(const float a) {
-	mat4 ret = mat4(1.);
-	ret[0][0] = ret[1][1] = cos(a);
-	ret[1][0] = sin(a);
-	ret[0][1] = -ret[1][0];
-	return ret;
+vec3 rotateZ(const vec3 p, const float a) {
+    float c = cos(a), s = sin(a);
+    return vec3(c*p.x-s*p.y, s*p.x+c*p.y, p.z);
 }
-vec3 rotate(const vec4 vec, const vec3 angles) {
-    return vec3(matRotateX(angles.x) * matRotateY(angles.y)
-        * matRotateZ(angles.z) * vec);
+vec3 rotate(vec3 point, const vec3 angles) {
+    return rotateZ(rotateY(rotateX(point,
+        angles.x), angles.y), angles.z);
 }
 
 // 光照
@@ -113,9 +100,10 @@ void updateLight() {
     light.size = vec2(.25, .25);
     light.normal = vec3(0., -1., 0.);
     light.position = vec3(.5 * sin(iTime), .9, .5 * cos(iTime));
+    // light.position = vec3(0., .9, 0.);
 
     light.color = vec3(1., 1., 1.);
-    light.intensity = 2.;
+    light.intensity = 4.;
 
     light.area = light.size.x * light.size.y;
     light.albedo = vec4(light.color, light.intensity / light.area);
@@ -172,7 +160,6 @@ void updateWalls() {
     back.color = vec3(.7, .7, .7);
     back.intensity = 0.;
     back.albedo = vec4(back.color, back.intensity);
-
 }
 
 struct Box {
@@ -188,19 +175,37 @@ struct Box {
 void updateBoxes() {
     big.size = vec3(.25, .5, .25);
     big.rotation = vec3(0., .6, 0.);
-    big.position = vec3(-.35, -.5, -.35);
+    big.position = vec3(-.25, -.5, -.35);
 
     big.color = vec3(.7, .7, .7);
     big.intensity = 0.;
     big.albedo = vec4(big.color, big.intensity);
 
-    small.size = vec3(0.25, 0.25, 0.25);
+    small.size = vec3(.25, .25, .25);
     small.rotation = vec3(0., 0., 0.);
-    small.position = vec3(0.5, -0.75, 0.35);
+    small.position = vec3(.5, -.75, .35);
 
     small.color = vec3(.7, .7, .7);
     small.intensity = 0.;
     small.albedo = vec4(small.color, small.intensity);
+}
+
+struct Sphere {
+    float radius;
+    vec3 position;
+
+    vec3 color;
+    float intensity;
+    vec4 albedo;
+} sphere;
+
+void updateSphere() {
+    sphere.radius = .3;
+    sphere.position = vec3(-.35, -.75, .5);
+
+    sphere.color = vec3(.7, .7, .7);
+    sphere.intensity = 0.;
+    sphere.albedo = vec4(sphere.color, sphere.intensity);
 }
 
 // 追踪
@@ -266,15 +271,15 @@ float _intersectBox(const Ray ray, const vec3 size, out vec3 normal) {
 { \
     vec3 surface_normal; \
     Ray ray_transformed = Ray( \
-        rotate(vec4(ray.origin-box.position, 1.), box.rotation), \
-        rotate(vec4(ray.direction, 0.), box.rotation) \
+        rotate(ray.origin-box.position, -box.rotation), \
+        rotate(ray.direction, -box.rotation) \
     ); \
     float t = _intersectBox(ray_transformed, box.size, surface_normal); \
     if (t < min_t) { \
         min_t = t; \
         point = rayAt(ray, t); \
         albedo = box.albedo; \
-        normal = rotate(vec4(surface_normal, 0.), -box.rotation); \
+        normal = rotate(surface_normal, box.rotation); \
     } \
 }
 
@@ -300,6 +305,41 @@ float _intersectPlane(const Ray ray, const vec3 point, const vec3 normal) {
     } \
 }
 
+float _intersectSphere(const Ray ray, const vec3 center, const float radius) {
+    
+    vec3 line = center - ray.origin;
+    float proj = dot(ray.direction, line);
+
+    float line_square = dot(line, line);
+    float radius_square = radius * radius;
+    
+    if (line_square > radius_square && proj < 0.) {
+        return INFINITY;
+    }
+
+    float delta_square = line_square - proj * proj;
+    if (delta_square > radius_square) {
+        return INFINITY;
+    }
+
+    float delta = sqrt(radius_square - delta_square);
+    if (line_square > radius_square) {
+        return proj - delta;
+    } else return proj + delta;
+}
+
+#define intersectSphere(sphere) \
+{ \
+    float t = _intersectSphere(ray, sphere.position, sphere.radius); \
+    if (t < min_t) { \
+        vec3 p = rayAt(ray, t); \
+        min_t = t; \
+        point = p; \
+        normal = normalize(p - sphere.position); \
+        albedo = sphere.albedo; \
+    } \
+}
+
 float intersect(const Ray ray, inout vec3 point,
     inout vec3 normal, out vec4 albedo) {
 
@@ -310,6 +350,7 @@ float intersect(const Ray ray, inout vec3 point,
     // 求光源与场景中箱子的交点
     intersectBox(big);
     intersectBox(small);
+    intersectSphere(sphere);
 
     // 求光源与墙体和灯光的交点
     intersectPlane(light, xz);
@@ -364,7 +405,7 @@ void directLight(const vec3 ejectionAtten, const vec3 position,
     vec3 brdf = albedo.rgb / PI;
 
     // 对光源上的点进行随机采样
-    vec3 pos_on_light = sampleLight(GetRandom());
+    vec3 pos_on_light = sampleLight(getRandom());
 
     // 求出交点和光源点连线的方向
     vec3 direction = pos_on_light - position;
@@ -385,9 +426,9 @@ void directLight(const vec3 ejectionAtten, const vec3 position,
         // 如果片元处在阴影中，则舍弃直接光照的贡献
         if (testVisibility(position, pos_on_light)) {
 
-            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 (* 角度衰减) / 光照分布。
+            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 * brdf (* 角度衰减) / 光照分布。
             vec3 intensity = light.albedo.rgb * light.albedo.a;
-            contribution += ejectionAtten * intensity * brdf / light_pdf;
+            contribution += ejectionAtten * intensity * weight * brdf / light_pdf;
         }
     }
 }
@@ -401,7 +442,7 @@ bool indirectLight(inout vec3 ejectionAtten, inout vec3 position,
 
     // 利用蒙特卡洛积分确定弹射的射线
     mat3 onb = constructONBFrisvad(normal);
-    vec3 direction_next = normalize(onb * sampleCosHemisphere(GetRandom()));
+    vec3 direction_next = normalize(onb * sampleCosHemisphere(getRandom()));
 
     // 使 origin 略微前移防止干扰
     Ray ray_next = Ray(position, direction_next); 
@@ -429,9 +470,9 @@ bool indirectLight(inout vec3 ejectionAtten, inout vec3 position,
             float light_pdf = 1. / (light.area * angularAtten);
             float weight = brdf_pdf / (light_pdf + brdf_pdf);
 
-            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 (* 角度衰减) / 光照分布。
+            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 * brdf (* 角度衰减) / 光照分布。
             vec3 intensity = light.albedo.rgb * light.albedo.a;
-            contribution += ejectionAtten * intensity  * brdf / light_pdf;
+            contribution += ejectionAtten * intensity * weight * brdf / light_pdf;
         }
         
         // 停止弹射
@@ -486,6 +527,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     updateRandom();
     updateWalls();
     updateBoxes();
+    updateSphere();
 
     // 将 uv 移动至屏幕中间并处理长宽比
     vec2 uv = fragCoord / iResolution.xy - .5;
@@ -495,7 +537,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     // 由此片元发出若干条射线进行路径追踪
     vec3 color = vec3(0.);
     for (int i=0; i<NUM_SAMPLES; i++) {
-        vec2 random_result = GetRandom();
+        vec2 random_result = getRandom();
 
         // 将每次追踪采样得到的颜色值累加
         color += sampleColor(Ray(
