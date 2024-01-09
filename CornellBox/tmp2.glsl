@@ -1,12 +1,12 @@
 // 数学
 #define PI 3.141592653589                       // 常量 π
 #define INFINITY 9999999.                       // 无限大
-#define RANDOM_SEED 0u                          // 初始随机种子
+#define RANDOM_SEED 0                           // 初始随机种子
 #define EPS 1e-5                                // 误差 EPS
 
 struct Random {
-    uint seed;                                  // 随机种子
-    uint index;                                 // 随机索引
+    int seed;                                   // 随机种子
+    int flat_index;                             // 随机索引
 } random;
 
 void updateRandom() {
@@ -14,27 +14,30 @@ void updateRandom() {
     // 随机参数 rand seed 和 index
     random = Random(
         RANDOM_SEED,
-        uint(dot(gl_FragCoord.xy, vec2(1., 4096.)))
+        int(dot(gl_FragCoord.xy, vec2(1., 4096.)))
     );
 }
 
-vec2 encryptTEA(const uint index, inout uint seed) {
+void EncryptTEA(inout uvec2 arg) {
 
     // 对输入的 arg 进行 TEA 加密
     uvec4 key = uvec4(0xa341316c, 0xc8013ea4, 0xad90777d, 0x7e95761e);
-    uint v0 = index, v1 = seed++, sum = 0u, delta = 0x9e3779b9u;
+    uint v0 = arg[0], v1 = arg[1], sum = 0u, delta = 0x9e3779b9u;
     for (int i=0; i<32; i++) {
         sum += delta;
         v0 += ((v1<<4)+key[0]) ^ (v1+sum) ^ ((v1>>5)+key[1]);
         v1 += ((v0<<4)+key[2]) ^ (v0+sum) ^ ((v0>>5)+key[3]);
     }
-    return vec2(v0, v1) / vec2(0xffffffffu);
+    arg[0] = v0;
+    arg[1] = v1;
 }
 
-vec2 getRandom() {
+vec2 GetRandom() {
 
     // fract 取小数部分获得随机数
-    return fract(encryptTEA(random.index, random.seed));
+    uvec2 arg = uvec2(random.flat_index, random.seed++);
+    EncryptTEA(arg);
+    return fract(vec2(arg) / vec2(0xffffffffu));
 }
 
 vec2 sampleDisk(const vec2 uv) {
@@ -55,11 +58,12 @@ vec3 sampleCosHemisphere(const vec2 uv) {
 mat3 constructONBFrisvad(const vec3 normal) {
 	mat3 ret;
 	ret[1] = normal;
-	if (normal.z < -1. + EPS) {
-		ret[0] = vec3(0., -1., 0.);
-		ret[2] = vec3(-1., 0., 0.);
-	} else {
-		float a = 1. / (1. + normal.z);
+	if(normal.z < -0.999805696) {
+		ret[0] = vec3(0.0, -1.0, 0.0);
+		ret[2] = vec3(-1.0, 0.0, 0.0);
+	}
+	else {
+		float a = 1.0 / (1.0 + normal.z);
 		float b = -normal.x * normal.y * a;
 		ret[0] = vec3(1.0 - normal.x * normal.x * a, b, -normal.x);
 		ret[2] = vec3(b, 1.0 - normal.y * normal.y * a, -normal.y);
@@ -67,38 +71,42 @@ mat3 constructONBFrisvad(const vec3 normal) {
 	return ret;
 }
 
-vec3 rotateX(const vec3 p, const float a) {
-    float c = cos(a), s = sin(a);
-    return vec3(p.x, c*p.y-s*p.z, s*p.y+c*p.z);
+mat4 matRotateX(const float a) {
+	mat4 ret = mat4(1.);
+	ret[1][1] = ret[2][2] = cos(a);
+	ret[2][1] = sin(a);
+	ret[1][2] = -ret[2][1];
+	return ret;
 }
-vec3 rotateY(const vec3 p, const float a) {
-    float c = cos(a), s = sin(a);
-    return vec3(c*p.x+s*p.z, p.y, -s*p.x+c*p.z);
+mat4 matRotateY(const float a) {
+	mat4 ret = mat4(1.);
+	ret[0][0] = ret[2][2] = cos(a);
+	ret[0][2] = sin(a);
+	ret[2][0] = -ret[0][2];
+	return ret;
 }
-vec3 rotateZ(const vec3 p, const float a) {
-    float c = cos(a), s = sin(a);
-    return vec3(c*p.x-s*p.y, s*p.x+c*p.y, p.z);
+mat4 matRotateZ(const float a) {
+	mat4 ret = mat4(1.);
+	ret[0][0] = ret[1][1] = cos(a);
+	ret[1][0] = sin(a);
+	ret[0][1] = -ret[1][0];
+	return ret;
 }
-vec3 rotate(vec3 point, const vec3 angles) {
-    return rotateZ(rotateY(rotateX(point,
-        angles.x), angles.y), angles.z);
+vec3 rotate(const vec4 vec, const vec3 angles) {
+    return vec3(matRotateX(angles.x) * matRotateY(angles.y)
+        * matRotateZ(angles.z) * vec);
 }
 
 // 光照
-struct Material {
-    vec3 color;                                 // 表面颜色
-    float roughness;                            // 面粗糙度
-    vec3 fresnel;                               // 菲涅尔数
-    float metallic;                             // 面金属度
-    float intensity;                            // 墙体亮度
-};
 struct Light {
     vec2 size;                                  // 光源大小
-    float area;                                 // 光源面积
     vec3 normal;                                // 光源朝向
     vec3 position;                              // 光源位置
 
-    Material mat;
+    vec3 color;                                 // 光源颜色
+    float intensity;                            // 光源亮度
+    vec4 albedo;                                // 光反射率
+    float area;                                 // 光源区域
 } light;
 
 void updateLight() {
@@ -106,9 +114,11 @@ void updateLight() {
     light.normal = vec3(0., -1., 0.);
     light.position = vec3(.5 * sin(iTime), .9, .5 * cos(iTime));
 
+    light.color = vec3(1., 1., 1.);
+    light.intensity = 2.;
+
     light.area = light.size.x * light.size.y;
-    light.mat.color = vec3(1., 1., 1.);
-    light.mat.intensity = 8.;
+    light.albedo = vec4(light.color, light.intensity / light.area);
 }
 
 // 模型
@@ -117,7 +127,9 @@ struct Wall {
     vec3 normal;                                // 墙体法线
     vec3 position;                              // 墙体位置
 
-    Material mat;                               // 墙体材质
+    vec3 color;                                 // 墙体颜色
+    float intensity;                            // 墙体亮度
+    vec4 albedo;                                // 光反射率
 } left, right, bottom, top, back;
 
 void updateWalls() {
@@ -125,51 +137,42 @@ void updateWalls() {
     left.normal = vec3(1., 0., 0.);
     left.position = vec3(-1., 0., 0.);
 
-    left.mat.color = vec3(.9, .1, .1);
-    left.mat.roughness = 1.;
-    left.mat.fresnel = vec3(.03, .03, .03);
-    left.mat.metallic = .1;
-    left.mat.intensity = 0.;
+    left.color = vec3(.9, .1, .1);
+    left.intensity = 0.;
+    left.albedo = vec4(left.color, left.intensity);
 
     right.size = vec2(1., 1.);
     right.normal = vec3(-1., 0., 0.);
     right.position = vec3(1., 0., 0.);
 
-    right.mat.color = vec3(.1, .9, .1);
-    right.mat.roughness = 1.;
-    right.mat.fresnel = vec3(.56, .57, .58);
-    right.mat.metallic = .1;
-    right.mat.intensity = 0.;
+    right.color = vec3(.1, .9, .1);
+    right.intensity = 0.;
+    right.albedo = vec4(right.color, right.intensity);
 
     bottom.size = vec2(1., 1.);
     bottom.normal = vec3(0., 1., 0.);
     bottom.position = vec3(0., -1., 0.);
 
-    bottom.mat.color = vec3(.7, .7, .7);
-    bottom.mat.roughness = 1.;
-    bottom.mat.fresnel = vec3(.05, .05, .05);
-    bottom.mat.metallic = .1;
-    bottom.mat.intensity = 0.;
+    bottom.color = vec3(.7, .7, .7);
+    bottom.intensity = 0.;
+    bottom.albedo = vec4(bottom.color, bottom.intensity);
 
     top.size = vec2(1., 1.);
     top.normal = vec3(0., -1., 0.);
     top.position = vec3(0., 1., 0.);
 
-    top.mat.color = vec3(.7, .7, .7);
-    top.mat.roughness = 1.;
-    top.mat.fresnel = vec3(.05, .05, .05);
-    top.mat.metallic = .1;
-    top.mat.intensity = 0.;
+    top.color = vec3(.7, .7, .7);
+    top.intensity = 0.;
+    top.albedo = vec4(top.color, top.intensity);
 
     back.size = vec2(1., 1.);
     back.normal = vec3(0., 0., 1.);
     back.position = vec3(0., 0., -1.);
 
-    back.mat.color = vec3(.7, .7, .7);
-    back.mat.roughness = 1.;
-    back.mat.fresnel = vec3(.02, .02, .02);
-    back.mat.metallic = .1;
-    back.mat.intensity = 0.;
+    back.color = vec3(.7, .7, .7);
+    back.intensity = 0.;
+    back.albedo = vec4(back.color, back.intensity);
+
 }
 
 struct Box {
@@ -177,47 +180,27 @@ struct Box {
     vec3 rotation;
     vec3 position;
 
-    Material mat;
+    vec3 color;
+    float intensity;
+    vec4 albedo;
 } big, small;
 
 void updateBoxes() {
     big.size = vec3(.25, .5, .25);
     big.rotation = vec3(0., .6, 0.);
-    big.position = vec3(-.25, -.5, -.35);
+    big.position = vec3(-.35, -.5, -.35);
 
-    big.mat.color = vec3(.7, .7, .7);
-    big.mat.roughness = 1.;
-    big.mat.fresnel = vec3(.03, .03, .03);
-    big.mat.metallic = .1;
-    big.mat.intensity = 0.;
+    big.color = vec3(.7, .7, .7);
+    big.intensity = 0.;
+    big.albedo = vec4(big.color, big.intensity);
 
-    small.size = vec3(.25, .25, .25);
+    small.size = vec3(0.25, 0.25, 0.25);
     small.rotation = vec3(0., 0., 0.);
-    small.position = vec3(.5, -.75, .35);
+    small.position = vec3(0.5, -0.75, 0.35);
 
-    small.mat.color = vec3(.7, .7, .7);
-    small.mat.roughness = 1.;
-    small.mat.fresnel = vec3(.95, .93, .88);
-    small.mat.metallic = .9;
-    small.mat.intensity = 0.;
-}
-
-struct Sphere {
-    float radius;
-    vec3 position;
-
-    Material mat;
-} sphere;
-
-void updateSphere() {
-    sphere.radius = .3;
-    sphere.position = vec3(-.35, -.75, .5);
-
-    sphere.mat.color = vec3(.7, .7, .7);
-    sphere.mat.roughness = .3;
-    sphere.mat.fresnel = vec3(1., .71, .29);
-    sphere.mat.metallic = .9;
-    sphere.mat.intensity = 0.;
+    small.color = vec3(.7, .7, .7);
+    small.intensity = 0.;
+    small.albedo = vec4(small.color, small.intensity);
 }
 
 // 追踪
@@ -283,15 +266,15 @@ float _intersectBox(const Ray ray, const vec3 size, out vec3 normal) {
 { \
     vec3 surface_normal; \
     Ray ray_transformed = Ray( \
-        rotate(ray.origin-box.position, -box.rotation), \
-        rotate(ray.direction, -box.rotation) \
+        rotate(vec4(ray.origin-box.position, 1.), box.rotation), \
+        rotate(vec4(ray.direction, 0.), box.rotation) \
     ); \
     float t = _intersectBox(ray_transformed, box.size, surface_normal); \
     if (t < min_t) { \
         min_t = t; \
         point = rayAt(ray, t); \
-        normal = rotate(surface_normal, box.rotation); \
-        material = box.mat; \
+        albedo = box.albedo; \
+        normal = rotate(vec4(surface_normal, 0.), -box.rotation); \
     } \
 }
 
@@ -308,60 +291,25 @@ float _intersectPlane(const Ray ray, const vec3 point, const vec3 normal) {
     float t = _intersectPlane(ray, wall.position, wall.normal); \
     if (t < min_t) { \
         vec3 p = rayAt(ray, t); \
-        if (all(lessThan(abs(wall.position-p).coord, wall.size))) { \
+        if (all(lessThan(abs(wall.position-p).coord, vec2(wall.size)))) { \
             min_t = t; \
             point = p; \
             normal = wall.normal; \
-            material = wall.mat; \
+            albedo = wall.albedo; \
         } \
     } \
 }
 
-float _intersectSphere(const Ray ray, const vec3 center, const float radius) {
-    
-    vec3 line = center - ray.origin;
-    float proj = dot(ray.direction, line);
-
-    float line_square = dot(line, line);
-    float radius_square = radius * radius;
-    
-    if (line_square > radius_square && proj < 0.) {
-        return INFINITY;
-    }
-
-    float delta_square = line_square - proj * proj;
-    if (delta_square > radius_square) {
-        return INFINITY;
-    }
-
-    float delta = sqrt(radius_square - delta_square);
-    if (line_square > radius_square) {
-        return proj - delta;
-    } else return proj + delta;
-}
-
-#define intersectSphere(sphere) \
-{ \
-    float t = _intersectSphere(ray, sphere.position, sphere.radius); \
-    if (t < min_t) { \
-        vec3 p = rayAt(ray, t); \
-        min_t = t; \
-        point = p; \
-        normal = normalize(p - sphere.position); \
-        material = sphere.mat; \
-    } \
-}
-
 float intersect(const Ray ray, inout vec3 point,
-    inout vec3 normal, out Material material) {
+    inout vec3 normal, out vec4 albedo) {
 
     // 初始化 min_t 为无穷，albedo 为全 0
     float min_t = INFINITY;
+    albedo = vec4(0.);
 
     // 求光源与场景中箱子的交点
     intersectBox(big);
     intersectBox(small);
-    intersectSphere(sphere);
 
     // 求光源与墙体和灯光的交点
     intersectPlane(light, xz);
@@ -386,49 +334,11 @@ bool testVisibility(const vec3 p1, const vec3 p2) {
     
     // 求射线与场景的交点
     vec3 normal, point;
-    Material material;
-    float t = intersect(ray, point, normal, material);
+    vec4 albedo;
+    float t = intersect(ray, point, normal, albedo);
 
     // 如果 t 大于 p1 与 p2 的距离则 p1、p2 互相可见
     return t > distance(p1, p2) - 2. * EPS;
-}
-
-// 材质
-float DistributionGGX(const float dnh, const float a) {
-    float _dnh = max(0., dnh);
-    return a * a / PI / pow(_dnh * _dnh * (a * a - 1.) + 1., 2.);
-}
-
-vec3 FresnelSchlick(const float dvh, const vec3 fresnel) {
-    return fresnel + (1. - fresnel) * pow(1. - clamp(dvh, 0., 1.), 5.);
-}
-
-float GeometrySchlickGGX(float dnx, float k) {
-    return dnx / (dnx * (1. - k) + k);
-}
-
-float GeometrySmith(float dnv, float dnl, float a) {
-    float k = (a + 1.) * (a + 1.) / 8.;
-    return GeometrySchlickGGX(max(0., dnv), k)
-        * GeometrySchlickGGX(max(0., dnl), k);
-}
-
-vec3 BRDF(const vec3 n, const vec3 l, const vec3 v, const Material mat) {
-    vec3 h = normalize(l + v);
-    float dvh = dot(v, h);
-    float dnl = dot(n, l);
-    float dnv = dot(n, v);
-    float dnh = dot(n, h);
-    vec3 fresnel = mix(mat.fresnel, mat.color, mat.metallic);
-
-    float D = DistributionGGX(dnh, mat.roughness);
-    vec3 F = FresnelSchlick(dvh, fresnel);
-    float G = GeometrySmith(dnv, dnl, mat.roughness);
-    
-    float denom = 4. * max(0., dnv) * max(0., dnl);
-    vec3 specular = D * F * G / max(denom, EPS);
-    vec3 kd = (vec3(1.) - F) * (1. - mat.metallic);
-    return (kd * mat.color / PI + specular) * max(0., dnl);
 }
 
 // 渲染
@@ -446,20 +356,20 @@ vec3 sampleLight(const vec2 offset) {
     );
 }
 
-void directLight(const Ray ray, const vec3 ejectionAtten, const vec3 position,
-    const vec3 normal, const Material material, inout vec3 contribution) {
+void directLight(const vec3 ejectionAtten, const vec3 position,
+    const vec3 normal, const vec4 albedo, inout vec3 contribution) {
+
+    // 求 brdf_pdf 和 brdf
+    float brdf_pdf = 1. / PI;
+    vec3 brdf = albedo.rgb / PI;
 
     // 对光源上的点进行随机采样
-    vec3 pos_on_light = sampleLight(getRandom());
+    vec3 pos_on_light = sampleLight(GetRandom());
 
     // 求出交点和光源点连线的方向
     vec3 direction = pos_on_light - position;
     float product = dot(direction, direction);
     direction /= sqrt(product);
-
-    // 求 brdf_pdf 和 brdf
-    float brdf_pdf = 1. / PI;
-    vec3 brdf = BRDF(normal, direction, -ray.direction, material);
 
     // 光线出、入因夹角而衰减
     float angularAtten = max(0., dot(normal, direction))
@@ -468,29 +378,30 @@ void directLight(const Ray ray, const vec3 ejectionAtten, const vec3 position,
     // 如果光亮没有衰减至 0
     if (angularAtten > 0.) {
 
-        // 求算直接光照 PDF
+        // 求算直接光照 PDF 在所有光照 PDF 中的比重
         float light_pdf = 1. / (light.area * angularAtten);
+        float weight = light_pdf / (light_pdf + brdf_pdf);
 
         // 如果片元处在阴影中，则舍弃直接光照的贡献
         if (testVisibility(position, pos_on_light)) {
 
-            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 * brdf (* 角度衰减) / 光照分布。
-            vec3 intensity = light.mat.color * light.mat.intensity / light.area;
-            contribution += ejectionAtten * intensity * brdf / (light_pdf + brdf_pdf);
+            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 (* 角度衰减) / 光照分布。
+            vec3 intensity = light.albedo.rgb * light.albedo.a;
+            contribution += ejectionAtten * intensity * brdf / light_pdf;
         }
     }
 }
 
-bool indirectLight(const Ray ray, inout vec3 ejectionAtten, inout vec3 position,
-    inout vec3 normal, inout Material material, inout vec3 contribution) {
-
-    // 利用蒙特卡洛积分确定弹射的射线
-    mat3 onb = constructONBFrisvad(normal);
-    vec3 direction_next = normalize(onb * sampleCosHemisphere(getRandom()));
+bool indirectLight(inout vec3 ejectionAtten, inout vec3 position,
+    inout vec3 normal, inout vec4 albedo, inout vec3 contribution) {
 
     // 求 brdf_pdf 和 brdf
     float brdf_pdf = 1. / PI;
-    vec3 brdf = BRDF(normal, direction_next, -ray.direction, material);
+    vec3 brdf = albedo.rgb / PI;
+
+    // 利用蒙特卡洛积分确定弹射的射线
+    mat3 onb = constructONBFrisvad(normal);
+    vec3 direction_next = normalize(onb * sampleCosHemisphere(GetRandom()));
 
     // 使 origin 略微前移防止干扰
     Ray ray_next = Ray(position, direction_next); 
@@ -498,14 +409,14 @@ bool indirectLight(const Ray ray, inout vec3 ejectionAtten, inout vec3 position,
 
     // 求射线弹射之后和场景的交点
     vec3 position_next, normal_next;
-    Material material_next;
-    float t = intersect(ray_next, position_next, normal_next, material_next);
+    vec4 albedo_next;
+    float t = intersect(ray_next, position_next, normal_next, albedo_next);
 
     // 如果没有交点，则并终止循环
     if (t == INFINITY) return false;
 
     // 如果交点在光源上，
-    if (material_next.intensity > 0.) {
+    if (albedo_next.a > 0.) {
 
         // 光线出、入因夹角而衰减
         float angularAtten = max(0., dot(normal, ray_next.direction))
@@ -514,12 +425,13 @@ bool indirectLight(const Ray ray, inout vec3 ejectionAtten, inout vec3 position,
         // 如果光亮没有衰减至 0
         if (angularAtten > 0.) {
 
-            // 求算间接光照 PDF
+            // 求算间接光照 PDF 在所有光照 PDF 中的比重
             float light_pdf = 1. / (light.area * angularAtten);
+            float weight = brdf_pdf / (light_pdf + brdf_pdf);
 
-            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 * brdf (* 角度衰减) / 光照分布。
-            vec3 intensity = light.mat.color * light.mat.intensity / light.area;
-            contribution += ejectionAtten * intensity * brdf / (light_pdf + brdf_pdf);
+            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 (* 角度衰减) / 光照分布。
+            vec3 intensity = light.albedo.rgb * light.albedo.a;
+            contribution += ejectionAtten * intensity  * brdf / light_pdf;
         }
         
         // 停止弹射
@@ -530,7 +442,7 @@ bool indirectLight(const Ray ray, inout vec3 ejectionAtten, inout vec3 position,
     ejectionAtten *= brdf / brdf_pdf;
     position = position_next;
     normal = normal_next;
-    material = material_next;
+    albedo = albedo_next;
 
     // 继续弹射
     return true;
@@ -543,27 +455,25 @@ vec3 sampleColor(const Ray ray) {
 
     // 求出射线与整个场景的第一个交点
     vec3 position, normal;
-    Material material;
-    float t = intersect(ray, position, normal, material);
+    vec4 albedo;
+    float t = intersect(ray, position, normal, albedo);
 
     // 如果不存在交点，返回黑色
     if (t == INFINITY) return vec3(0.);
 
     // 如果位于光源上，返回光源颜色
-    if (material.intensity > 0.) {
-        return material.color * material.intensity;
-    }
+    if (albedo.a > 0.) return albedo.rgb * albedo.a;
 
     // 从交点出发，进行射线弹射
     for (int i=0; i<NUM_BOUNCES; i++) {
 
         // 累加直接光照的贡献值
-        directLight(ray, ejectionAtten, position,
-            normal, material, contribution);
+        // directLight(ejectionAtten, position,
+        //     normal, albedo, contribution);
 
         // 累加间接光照的贡献值
-        if (indirectLight(ray, ejectionAtten, position,
-            normal, material, contribution) == false) break;
+        if (indirectLight(ejectionAtten, position,
+            normal, albedo, contribution) == false) break;
     }
     return contribution;
 }
@@ -576,7 +486,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     updateRandom();
     updateWalls();
     updateBoxes();
-    updateSphere();
 
     // 将 uv 移动至屏幕中间并处理长宽比
     vec2 uv = fragCoord / iResolution.xy - .5;
@@ -586,7 +495,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     // 由此片元发出若干条射线进行路径追踪
     vec3 color = vec3(0.);
     for (int i=0; i<NUM_SAMPLES; i++) {
-        vec2 random_result = getRandom();
+        vec2 random_result = GetRandom();
 
         // 将每次追踪采样得到的颜色值累加
         color += sampleColor(Ray(
@@ -601,7 +510,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             ))
         ));
     }
-    
+
     // 算出平均颜色并做 Gamma 运算得到片元结果
     fragColor = vec4(pow(color/float(NUM_SAMPLES), vec3(1./2.2)), 1.);
 }
