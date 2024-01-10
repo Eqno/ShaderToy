@@ -108,7 +108,7 @@ void updateLight() {
 
     light.area = light.size.x * light.size.y;
     light.mat.color = vec3(1., 1., 1.);
-    light.mat.intensity = 8.;
+    light.mat.intensity = 2.;
 }
 
 // 模型
@@ -126,19 +126,19 @@ void updateWalls() {
     left.position = vec3(-1., 0., 0.);
 
     left.mat.color = vec3(.9, .1, .1);
-    left.mat.roughness = 1.;
+    left.mat.roughness = .6;
     left.mat.fresnel = vec3(.03, .03, .03);
     left.mat.metallic = .1;
     left.mat.intensity = 0.;
 
     right.size = vec2(1., 1.);
     right.normal = vec3(-1., 0., 0.);
-    right.position = vec3(1., 0., 0.);
+    right.position = vec3(1, 0., 0.);
 
     right.mat.color = vec3(.1, .9, .1);
     right.mat.roughness = 1.;
-    right.mat.fresnel = vec3(.56, .57, .58);
-    right.mat.metallic = .1;
+    right.mat.fresnel = vec3(.93, .93, .93);
+    right.mat.metallic = 1.;
     right.mat.intensity = 0.;
 
     bottom.size = vec2(1., 1.);
@@ -182,7 +182,7 @@ struct Box {
 
 void updateBoxes() {
     big.size = vec3(.25, .5, .25);
-    big.rotation = vec3(0., .6, 0.);
+    big.rotation = vec3(0., 1.2, 0.);
     big.position = vec3(-.25, -.5, -.35);
 
     big.mat.color = vec3(.7, .7, .7);
@@ -197,8 +197,8 @@ void updateBoxes() {
 
     small.mat.color = vec3(.7, .7, .7);
     small.mat.roughness = 1.;
-    small.mat.fresnel = vec3(.95, .93, .88);
-    small.mat.metallic = .9;
+    small.mat.fresnel = vec3(.02, .02, .02);
+    small.mat.metallic = .1;
     small.mat.intensity = 0.;
 }
 
@@ -425,7 +425,7 @@ vec3 BRDF(const vec3 n, const vec3 l, const vec3 v, Material mat)
     vec3 F = FresnelSchlick(max(dvh, 0.), fresnel);
     float G = GeometrySmith(dnv, dnl, mat.roughness);
 
-    vec3 specular = D * G * F / max(4. * saturate(dnv) * saturate(dnl), EPS);
+    vec3 specular = D * F * G / max(4. * saturate(dnv) * saturate(dnl), EPS);
     vec3 kd = mix(vec3(1.) - F, vec3(0.), mat.metallic);
     return kd * mat.color / PI + specular;
 }
@@ -456,9 +456,9 @@ void directLight(const Ray ray, const vec3 ejectionAtten, const vec3 position,
     float product = dot(direction, direction);
     direction /= sqrt(product);
 
-    // 求 brdf_pdf 和 brdf
+    // 求 BRDF 项
     float brdf_pdf = 1. / PI;
-    vec3 brdf = BRDF(normal, direction, -ray.direction, material);
+    vec3 brdf = BRDF(normal, direction, -ray.direction, material) / brdf_pdf;
 
     // 光线出、入因夹角而衰减
     float angularAtten = max(0., dot(normal, direction))
@@ -467,29 +467,26 @@ void directLight(const Ray ray, const vec3 ejectionAtten, const vec3 position,
     // 如果光亮没有衰减至 0
     if (angularAtten > 0.) {
 
-        // 求算直接光照 PDF
-        float light_pdf = 1. / (light.area * angularAtten);
-
         // 如果片元处在阴影中，则舍弃直接光照的贡献
         if (testVisibility(position, pos_on_light)) {
 
-            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 * brdf (* 角度衰减) / 光照分布。
-            vec3 intensity = light.mat.color * light.mat.intensity / light.area;
-            contribution += ejectionAtten * intensity * brdf / (light_pdf + brdf_pdf);
+            // 渲染方程：弹射衰减 * 角度衰减 * 入射光强 * brdf
+            vec3 intensity = light.mat.color * light.mat.intensity;
+            contribution += ejectionAtten * angularAtten * intensity * brdf;
         }
     }
 }
 
-bool indirectLight(const Ray ray, inout vec3 ejectionAtten, inout vec3 position,
+bool indirectLight(inout Ray ray, inout vec3 ejectionAtten, inout vec3 position,
     inout vec3 normal, inout Material material, inout vec3 contribution) {
 
     // 利用蒙特卡洛积分确定弹射的射线
     mat3 onb = constructONBFrisvad(normal);
     vec3 direction_next = normalize(onb * sampleCosHemisphere(getRandom()));
 
-    // 求 brdf_pdf 和 brdf
+    // 求 BRDF 项
     float brdf_pdf = 1. / PI;
-    vec3 brdf = BRDF(normal, direction_next, -ray.direction, material);
+    vec3 brdf = BRDF(normal, direction_next, -ray.direction, material) / brdf_pdf;
 
     // 使 origin 略微前移防止干扰
     Ray ray_next = Ray(position, direction_next); 
@@ -507,35 +504,36 @@ bool indirectLight(const Ray ray, inout vec3 ejectionAtten, inout vec3 position,
     if (material_next.intensity > 0.) {
 
         // 光线出、入因夹角而衰减
-        float angularAtten = max(0., dot(normal, ray_next.direction))
-            * max(0., -dot(ray_next.direction, normal_next)) / (t * t);
+        float angularAtten = max(-INFINITY, dot(normal, ray_next.direction))
+            * max(-INFINITY, -dot(ray_next.direction, normal_next)) / (t * t);
 
         // 如果光亮没有衰减至 0
         if (angularAtten > 0.) {
 
-            // 求算间接光照 PDF
-            float light_pdf = 1. / (light.area * angularAtten);
-
-            // 渲染方程：弹射衰减 * 入射光强 * 直接比重 * brdf (* 角度衰减) / 光照分布。
-            vec3 intensity = light.mat.color * light.mat.intensity / light.area;
-            contribution += ejectionAtten * intensity * brdf / (light_pdf + brdf_pdf);
+            // 渲染方程：弹射衰减 * 角度衰减 * 入射光强 * brdf
+            vec3 intensity = light.mat.color * light.mat.intensity;
+            contribution += ejectionAtten * angularAtten * intensity * brdf;
         }
         
         // 停止弹射
         return false;
     }
 
-    // 如果交点不在光源上，更新起点为交点
-    ejectionAtten *= brdf / brdf_pdf;
+    // 如果交点不在光源上更新数据
+    ray = ray_next;
     position = position_next;
     normal = normal_next;
     material = material_next;
+
+    // 更新弹射造成的光衰减
+    ejectionAtten *= brdf;
 
     // 继续弹射
     return true;
 }
 
-vec3 sampleColor(const Ray ray) {
+vec3 sampleColor(Ray ray) {
+
     // 初始化光照贡献和弹射衰减
     vec3 contribution = vec3(0.);
     vec3 ejectionAtten = vec3(1.);
